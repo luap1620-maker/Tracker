@@ -5,15 +5,20 @@ const path = require(‘path’);
 const CONFIG = {
 HELIUS_API_KEY: ‘9fdd885d-7eb9-4708-8962-c0bda789b1f8’,
 HELIUS_API: ‘https://api.helius.xyz/v0’,
-DEXSCREENER_API: ‘https://api.dexscreener.com/latest/dex’,
-MIN_WINRATE: 57,
+SOLSCAN_API: ‘https://pro-api.solscan.io/v2.0’,
+SOLSCAN_PUBLIC: ‘https://api.solscan.io’,
+DEXSCREENER_API: ‘https://api.dexscreener.com’,
+MIN_WINRATE: 55,
 MAX_RUG_RATE: 20,
 MIN_TRADES: 3,
+MIN_BALANCE_USD: 1500,
+MAX_TRADES_PER_DAY: 50,
+SOL_PRICE_USD: 150,
 KNOWN_WALLETS: [
 { address: ‘65paNEG8m7mCVoASVF2KbRdU21aKXdASSB9G3NjCSQuE’, alias: ‘jijo’ },
 { address: ‘4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk’, alias: ‘PULL’ },
 ],
-MAX_NEW_WALLETS: 20,
+MAX_NEW_WALLETS: 30,
 RAPPORT_DIR: path.join(__dirname, ‘rapports’),
 LATEST_JSON: path.join(__dirname, ‘latest_wallets.json’),
 HISTORIQUE_DIR: path.join(__dirname, ‘historique’),
@@ -25,9 +30,7 @@ const sleep = function(ms) { return new Promise(function(r) { return setTimeout(
 
 function ensureDirs() {
 [CONFIG.RAPPORT_DIR, CONFIG.HISTORIQUE_DIR].forEach(function(dir) {
-if (fs.existsSync(dir) === false) {
-fs.mkdirSync(dir, { recursive: true });
-}
+if (fs.existsSync(dir) === false) fs.mkdirSync(dir, { recursive: true });
 });
 }
 
@@ -43,55 +46,42 @@ function log(msg) {
 console.log(’[’ + timestamp() + ’] ’ + msg);
 }
 
-// Etape 1 : Recupere les tokens trending sur Solana via DexScreener
-async function getTrendingTokens() {
-log(‘Recherche tokens trending sur DexScreener…’);
-for (var i = 0; i < CONFIG.MAX_RETRIES; i++) {
+// Balance SOL via Helius RPC
+async function getWalletBalance(walletAddress) {
 try {
-var res = await axios.get(‘https://api.dexscreener.com/token-boosts/top/v1’, {
-timeout: 15000,
-});
-var tokens = [];
-if (res.data && Array.isArray(res.data)) {
-for (var t = 0; t < res.data.length; t++) {
-if (res.data[t].chainId === ‘solana’) {
-tokens.push(res.data[t].tokenAddress);
-}
-}
-}
-log(‘DexScreener: ’ + tokens.length + ’ tokens trending Solana trouves’);
-return tokens.slice(0, 10);
-} catch (err) {
-log(’DexScreener tentative ’ + (i + 1) + ’ echouee: ’ + err.message);
-if (i < CONFIG.MAX_RETRIES - 1) await sleep(CONFIG.DELAY * (i + 2));
-}
-}
-return [];
+var res = await axios.post(‘https://mainnet.helius-rpc.com/?api-key=’ + CONFIG.HELIUS_API_KEY, {
+jsonrpc: ‘2.0’, id: 1, method: ‘getBalance’, params: [walletAddress]
+}, { timeout: 10000 });
+var lamports = res.data.result ? res.data.result.value : 0;
+return (lamports / 1e9) * CONFIG.SOL_PRICE_USD;
+} catch (err) { return 0; }
 }
 
-// Etape 2 : Pour chaque token, recupere les wallets qui ont trade dessus
-async function getWalletsFromToken(tokenAddress) {
-for (var i = 0; i < CONFIG.MAX_RETRIES; i++) {
+// Tokens detenus via Solscan public
+async function getWalletTokens(walletAddress) {
 try {
-var res = await axios.get(CONFIG.HELIUS_API + ‘/addresses/’ + tokenAddress + ‘/transactions’, {
-params: { limit: 50, type: ‘SWAP’, ‘api-key’: CONFIG.HELIUS_API_KEY },
+var res = await axios.get(CONFIG.SOLSCAN_PUBLIC + ‘/account/tokens’, {
+params: { address: walletAddress, limit: 50 },
+headers: { ‘User-Agent’: ‘Mozilla/5.0’ },
 timeout: 15000,
 });
-var wallets = {};
-var txs = res.data || [];
-for (var t = 0; t < txs.length; t++) {
-var feePayer = txs[t].feePayer;
-if (feePayer) wallets[feePayer] = true;
-}
-return Object.keys(wallets);
-} catch (err) {
-if (i < CONFIG.MAX_RETRIES - 1) await sleep(CONFIG.DELAY);
-}
-}
-return [];
+return res.data || [];
+} catch (err) { return []; }
 }
 
-// Etape 3 : Recupere les transactions SWAP d’un wallet
+// Activite de trading via Solscan public
+async function getWalletActivity(walletAddress) {
+try {
+var res = await axios.get(CONFIG.SOLSCAN_PUBLIC + ‘/account/defi/activities’, {
+params: { address: walletAddress, limit: 100, offset: 0 },
+headers: { ‘User-Agent’: ‘Mozilla/5.0’ },
+timeout: 15000,
+});
+return res.data && res.data.data ? res.data.data : [];
+} catch (err) { return []; }
+}
+
+// Transactions SWAP via Helius (fallback)
 async function getWalletTransactions(walletAddress) {
 for (var i = 0; i < CONFIG.MAX_RETRIES; i++) {
 try {
@@ -107,8 +97,45 @@ if (i < CONFIG.MAX_RETRIES - 1) await sleep(CONFIG.DELAY * (i + 2));
 return [];
 }
 
-// Etape 4 : Analyse les transactions et calcule les stats
-function analyzeWalletTrades(transactions, walletAddress) {
+// Tokens trending DexScreener
+async function getTrendingTokens() {
+log(‘Recherche tokens trending sur DexScreener…’);
+for (var i = 0; i < CONFIG.MAX_RETRIES; i++) {
+try {
+var res = await axios.get(‘https://api.dexscreener.com/token-boosts/top/v1’, { timeout: 15000 });
+var tokens = [];
+if (res.data && Array.isArray(res.data)) {
+for (var t = 0; t < res.data.length; t++) {
+if (res.data[t].chainId === ‘solana’) tokens.push(res.data[t].tokenAddress);
+}
+}
+log(‘DexScreener: ’ + tokens.length + ’ tokens trending Solana’);
+return tokens.slice(0, 10);
+} catch (err) {
+if (i < CONFIG.MAX_RETRIES - 1) await sleep(CONFIG.DELAY * (i + 2));
+}
+}
+return [];
+}
+
+// Wallets actifs sur un token
+async function getWalletsFromToken(tokenAddress) {
+try {
+var res = await axios.get(CONFIG.HELIUS_API + ‘/addresses/’ + tokenAddress + ‘/transactions’, {
+params: { limit: 50, type: ‘SWAP’, ‘api-key’: CONFIG.HELIUS_API_KEY },
+timeout: 15000,
+});
+var wallets = {};
+var txs = res.data || [];
+for (var t = 0; t < txs.length; t++) {
+if (txs[t].feePayer) wallets[txs[t].feePayer] = true;
+}
+return Object.keys(wallets);
+} catch (err) { return []; }
+}
+
+// Analyse les transactions Helius
+function analyzeTransactions(transactions, walletAddress) {
 var tokenPositions = {};
 var now = Date.now() / 1000;
 var weekAgo = now - (7 * 24 * 3600);
@@ -116,6 +143,7 @@ var monthAgo = now - (30 * 24 * 3600);
 var lastActive = 0;
 var recentTrades7d = 0;
 var recentTrades30d = 0;
+var dailyCounts = {};
 
 for (var t = 0; t < transactions.length; t++) {
 var tx = transactions[t];
@@ -125,36 +153,35 @@ if (tx.timestamp > weekAgo) recentTrades7d++;
 if (tx.timestamp > monthAgo) recentTrades30d++;
 
 ```
+// Compte trades par jour pour detecter les bots
+var day = new Date(tx.timestamp * 1000).toISOString().substring(0, 10);
+dailyCounts[day] = (dailyCounts[day] || 0) + 1;
+
 var swaps = tx.tokenTransfers || [];
 for (var s = 0; s < swaps.length; s++) {
   var transfer = swaps[s];
   var mint = transfer.mint;
   if (!mint || mint === 'So11111111111111111111111111111111111111112') continue;
-  if (!tokenPositions[mint]) {
-    tokenPositions[mint] = { bought: 0, sold: 0 };
-  }
-  if (transfer.toUserAccount === walletAddress) {
-    tokenPositions[mint].bought += parseFloat(transfer.tokenAmount || 0);
-  }
-  if (transfer.fromUserAccount === walletAddress) {
-    tokenPositions[mint].sold += parseFloat(transfer.tokenAmount || 0);
-  }
+  if (!tokenPositions[mint]) tokenPositions[mint] = { bought: 0, sold: 0 };
+  if (transfer.toUserAccount === walletAddress) tokenPositions[mint].bought += parseFloat(transfer.tokenAmount || 0);
+  if (transfer.fromUserAccount === walletAddress) tokenPositions[mint].sold += parseFloat(transfer.tokenAmount || 0);
 }
 ```
 
 }
 
-var wins = 0;
-var losses = 0;
-var rugCount = 0;
-var mints = Object.keys(tokenPositions);
+// Max trades par jour
+var maxPerDay = 0;
+var days = Object.keys(dailyCounts);
+for (var d = 0; d < days.length; d++) {
+if (dailyCounts[days[d]] > maxPerDay) maxPerDay = dailyCounts[days[d]];
+}
 
+var wins = 0, losses = 0, rugCount = 0;
+var mints = Object.keys(tokenPositions);
 for (var m = 0; m < mints.length; m++) {
 var pos = tokenPositions[mints[m]];
-if (pos.bought > 0 && pos.sold === 0) {
-rugCount++;
-continue;
-}
+if (pos.bought > 0 && pos.sold === 0) { rugCount++; continue; }
 if (pos.bought > 0 && pos.sold > 0) {
 var ratio = pos.sold / pos.bought;
 if (ratio >= 1.5) wins++;
@@ -168,7 +195,6 @@ var winrate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
 var rugRate = totalTokens > 0 ? (rugCount / totalTokens) * 100 : 0;
 
 return {
-address: walletAddress,
 totalTrades: totalTrades,
 totalTokens: totalTokens,
 wins: wins,
@@ -180,44 +206,88 @@ recentTrades7d: recentTrades7d,
 recentTrades30d: recentTrades30d,
 lastActive: lastActive,
 lastActiveDate: lastActive > 0 ? new Date(lastActive * 1000).toISOString().substring(0, 10) : ‘N/A’,
-isActiveThisWeek: lastActive > weekAgo,
+isActiveThisWeek: lastActive > (Date.now() / 1000 - 7 * 24 * 3600),
+maxTradesPerDay: maxPerDay,
+isBot: maxPerDay > CONFIG.MAX_TRADES_PER_DAY,
 };
 }
 
-function calculateScore(stats) {
+function calculateScore(stats, balance) {
 var winrate = parseFloat(stats.winrate);
 var rugRate = parseFloat(stats.rugRate);
 var trades = stats.totalTrades;
 var recent = stats.recentTrades7d;
+var balanceScore = Math.min((balance / 10000) * 10, 10);
 var score = 0;
-score += Math.min((winrate / 100) * 40, 40);
+score += Math.min((winrate / 100) * 35, 35);
 score += Math.max((1 - rugRate / 100) * 25, 0);
 score += Math.min((trades / 50) * 20, 20);
-score += Math.min((recent / 20) * 15, 15);
+score += Math.min((recent / 20) * 10, 10);
+score += balanceScore;
 return score.toFixed(1);
 }
 
-function filterWallet(stats) {
+function filterWallet(stats, balance) {
+if (balance < CONFIG.MIN_BALANCE_USD) return false;
 if (parseFloat(stats.winrate) < CONFIG.MIN_WINRATE) return false;
 if (parseFloat(stats.rugRate) >= CONFIG.MAX_RUG_RATE) return false;
 if (stats.isActiveThisWeek === false) return false;
 if (stats.totalTrades < CONFIG.MIN_TRADES) return false;
+if (stats.isBot) return false;
 return true;
 }
 
 async function processWallet(address, alias) {
 alias = alias || ‘’;
+
+// 1. Verifier balance
+var balance = await getWalletBalance(address);
+if (balance < CONFIG.MIN_BALANCE_USD) {
+log(’  ’ + address.substring(0, 8) + ’ | $’ + balance.toFixed(0) + ’ | filtre balance’);
+return null;
+}
+
+// 2. Recuperer transactions
 var transactions = await getWalletTransactions(address);
 if (!transactions || transactions.length === 0) return null;
 
-var stats = analyzeWalletTrades(transactions, address);
-stats.alias = alias;
-stats.score = calculateScore(stats);
+// 3. Analyser
+var stats = analyzeTransactions(transactions, address);
 
-var passes = filterWallet(stats);
-log(’  ’ + address.substring(0, 8) + ’ | WR: ’ + stats.winrate + ’% | Rug: ’ + stats.rugRate + ’% | Trades: ’ + stats.totalTrades + ’ | ’ + (passes ? ‘RETENU’ : ‘filtre’));
+if (stats.isBot) {
+log(’  ’ + address.substring(0, 8) + ’ | BOT detecte (’ + stats.maxTradesPerDay + ’ trades/jour max) | filtre’);
+return null;
+}
 
-if (passes) return stats;
+var score = calculateScore(stats, balance);
+var passes = filterWallet(stats, balance);
+
+log(’  ’ + address.substring(0, 8) + (alias ? ’ (’ + alias + ‘)’ : ‘’) +
+’ | $’ + balance.toFixed(0) +
+’ | WR: ’ + stats.winrate + ‘%’ +
+’ | Rug: ’ + stats.rugRate + ‘%’ +
+’ | Trades: ’ + stats.totalTrades +
+’ | ’ + (passes ? ‘RETENU’ : ‘filtre’));
+
+if (passes) {
+return {
+address: address,
+alias: alias,
+balance_usd: balance.toFixed(0),
+totalTrades: stats.totalTrades,
+totalTokens: stats.totalTokens,
+wins: stats.wins,
+losses: stats.losses,
+rugCount: stats.rugCount,
+winrate: stats.winrate,
+rugRate: stats.rugRate,
+recentTrades7d: stats.recentTrades7d,
+recentTrades30d: stats.recentTrades30d,
+maxTradesPerDay: stats.maxTradesPerDay,
+lastActiveDate: stats.lastActiveDate,
+score: score,
+};
+}
 return null;
 }
 
@@ -228,58 +298,44 @@ var allResults = [];
 var processedAddresses = {};
 
 try {
-// ETAPE 1 : Wallets connus (jijo, PULL)
-log(’— Etape 1 : Analyse wallets connus —’);
+// ETAPE 1 : Wallets connus
+log(’— Etape 1 : Wallets connus —’);
 for (var k = 0; k < CONFIG.KNOWN_WALLETS.length; k++) {
 var known = CONFIG.KNOWN_WALLETS[k];
 processedAddresses[known.address] = true;
-log(‘Analyse de ’ + known.alias + ’ (’ + known.address.substring(0, 8) + ‘…)’);
 var result = await processWallet(known.address, known.alias);
 if (result) allResults.push(result);
 await sleep(CONFIG.DELAY);
 }
 
 ```
-// ETAPE 2 : Decouverte via tokens trending DexScreener
-log('--- Etape 2 : Decouverte via tokens trending ---');
+// ETAPE 2 : Decouverte via DexScreener + Helius
+log('--- Etape 2 : Decouverte nouveaux wallets ---');
 var trendingTokens = await getTrendingTokens();
+var newWallets = {};
 
-if (trendingTokens.length > 0) {
-  var newWallets = {};
-
-  for (var tok = 0; tok < trendingTokens.length; tok++) {
-    log('Token trending ' + (tok + 1) + '/' + trendingTokens.length + ' : ' + trendingTokens[tok].substring(0, 8) + '...');
-    var wallets = await getWalletsFromToken(trendingTokens[tok]);
-    log('  -> ' + wallets.length + ' wallets trouves sur ce token');
-    for (var w = 0; w < wallets.length; w++) {
-      if (!processedAddresses[wallets[w]]) {
-        newWallets[wallets[w]] = true;
-      }
-    }
-    await sleep(CONFIG.DELAY);
+for (var tok = 0; tok < trendingTokens.length; tok++) {
+  log('Token ' + (tok + 1) + '/' + trendingTokens.length + ' : ' + trendingTokens[tok].substring(0, 8) + '...');
+  var wallets = await getWalletsFromToken(trendingTokens[tok]);
+  for (var w = 0; w < wallets.length; w++) {
+    if (!processedAddresses[wallets[w]]) newWallets[wallets[w]] = true;
   }
-
-  var newWalletList = Object.keys(newWallets).slice(0, CONFIG.MAX_NEW_WALLETS);
-  log('Analyse de ' + newWalletList.length + ' nouveaux wallets decouverts...');
-
-  for (var n = 0; n < newWalletList.length; n++) {
-    processedAddresses[newWalletList[n]] = true;
-    var res = await processWallet(newWalletList[n], '');
-    if (res) allResults.push(res);
-    await sleep(CONFIG.DELAY);
-  }
-
-} else {
-  log('DexScreener indisponible - wallets connus uniquement');
+  await sleep(CONFIG.DELAY);
 }
 
-// Tri par score
-allResults.sort(function(a, b) {
-  return parseFloat(b.score) - parseFloat(a.score);
-});
+var newWalletList = Object.keys(newWallets).slice(0, CONFIG.MAX_NEW_WALLETS);
+log('Analyse de ' + newWalletList.length + ' nouveaux wallets...');
+
+for (var n = 0; n < newWalletList.length; n++) {
+  processedAddresses[newWalletList[n]] = true;
+  var res = await processWallet(newWalletList[n], '');
+  if (res) allResults.push(res);
+  await sleep(CONFIG.DELAY);
+}
+
+allResults.sort(function(a, b) { return parseFloat(b.score) - parseFloat(a.score); });
 
 log('=== ' + allResults.length + ' wallets retenus ===');
-
 var report = generateReport(allResults);
 console.log('\n' + report);
 saveResults(allResults, report);
@@ -287,7 +343,7 @@ log('Cycle termine. Prochain dans 6h.');
 ```
 
 } catch (err) {
-log(’Erreur inattendue : ’ + err.message);
+log(’Erreur : ’ + err.message);
 console.error(err);
 }
 }
@@ -301,7 +357,9 @@ r += ‘============================================================\n\n’;
 r += ‘RESUME\n’;
 r += ‘–––––––––––––––––––––––\n’;
 r += ’  Wallets retenus  : ’ + wallets.length + ‘\n’;
-r += ’  Criteres         : Winrate >= ’ + CONFIG.MIN_WINRATE + ’%, Rug < ’ + CONFIG.MAX_RUG_RATE + ‘%, Actif 7j\n\n’;
+r += ’  Filtres          : WR >= ’ + CONFIG.MIN_WINRATE + ‘%, Rug < ’ + CONFIG.MAX_RUG_RATE + ‘%\n’;
+r += ’                     Balance >= $’ + CONFIG.MIN_BALANCE_USD + ‘\n’;
+r += ’                     Max ’ + CONFIG.MAX_TRADES_PER_DAY + ’ trades/jour (anti-bot)\n\n’;
 
 if (wallets.length === 0) {
 r += ‘Aucun wallet ne passe les filtres ce cycle.\n\n’;
@@ -313,13 +371,14 @@ var w = wallets[i];
 var label = w.alias ? w.alias : w.address.substring(0, 8) + ‘…’ + w.address.slice(-4);
 r += (i + 1) + ‘. ’ + label + ‘\n’;
 r += ’   Score         : ’ + w.score + ‘/100\n’;
+r += ’   Balance       : $’ + w.balance_usd + ‘\n’;
 r += ’   Winrate       : ’ + w.winrate + ‘%\n’;
 r += ’   Rug Rate      : ’ + w.rugRate + ‘%\n’;
 r += ’   Trades        : ’ + w.totalTrades + ’ (’ + w.wins + ‘W / ’ + w.losses + ‘L)\n’;
+r += ’   Max/jour      : ’ + w.maxTradesPerDay + ’ trades\n’;
 r += ’   Actif 7j      : ’ + w.recentTrades7d + ’ trades\n’;
-r += ’   Actif 30j     : ’ + w.recentTrades30d + ’ trades\n’;
 r += ’   Dernier trade : ’ + w.lastActiveDate + ‘\n’;
-r += ’   Adresse full  : ’ + w.address + ‘\n\n’;
+r += ’   Adresse       : ’ + w.address + ‘\n\n’;
 }
 
 ```
@@ -346,9 +405,7 @@ fs.writeFileSync(reportPath, report, ‘utf8’);
 var jsonPath = path.join(CONFIG.HISTORIQUE_DIR, ‘wallets_’ + tag + ‘.json’);
 fs.writeFileSync(jsonPath, JSON.stringify(wallets, null, 2), ‘utf8’);
 fs.writeFileSync(CONFIG.LATEST_JSON, JSON.stringify({
-updated_at: timestamp(),
-count: wallets.length,
-wallets: wallets,
+updated_at: timestamp(), count: wallets.length, wallets: wallets
 }, null, 2), ‘utf8’);
 log(’Rapport : ’ + reportPath);
 }
