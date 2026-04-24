@@ -15,8 +15,6 @@ MIN_TRADES: 1,
 MIN_BALANCE_USD: 1000,
 SOL_PRICE_USD: 150,
 KNOWN_WALLETS: [
-{ address: ‘65paNEG8m7mCVoASVF2KbRdU21aKXdASSB9G3NjCSQuE’, alias: ‘jijo’ },
-{ address: ‘4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk’, alias: ‘PULL’ },
 { address: ‘DpNVrtA3ERfKzX4F8Pi2CVykdJJjoNxyY5QgoytAwD26’, alias: ‘inconnu’ },
 { address: ‘EaVboaPxFCYanjoNWdkxTbPvt57nhXGu5i6m9m6ZS2kK’, alias: ‘danny’ },
 { address: ‘ECCKBDWX3MkEcf3bULbLBb9FvrEQLsmPMFTKFpvjzqgP’, alias: ‘Kenzo’ },
