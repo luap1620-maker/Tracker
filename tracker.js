@@ -11,7 +11,7 @@ SHYFT_API: ‘https://api.shyft.to/sol/v1’,
 DEXSCREENER_API: ‘https://api.dexscreener.com’,
 MIN_WINRATE: 55,
 MAX_RUG_RATE: 20,
-MIN_TRADES: 3,
+MIN_TRADES: 1,
 MIN_BALANCE_USD: 1000,
 SOL_PRICE_USD: 150,
 KNOWN_WALLETS: [
