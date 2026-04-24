@@ -263,6 +263,31 @@ return [];
 }
 }
 
+// Top traders d’un token via DexScreener
+async function getTopTradersFromToken(tokenAddress) {
+try {
+var res = await axios.get(‘https://api.dexscreener.com/latest/dex/tokens/’ + tokenAddress, {
+timeout: 15000,
+});
+if (!res.data || !res.data.pairs || res.data.pairs.length === 0) return [];
+var pair = res.data.pairs[0];
+var pairAddress = pair.pairAddress;
+var res2 = await axios.get(‘https://api.dexscreener.com/latest/dex/pairs/solana/’ + pairAddress + ‘/top-traders’, {
+timeout: 15000,
+});
+if (!res2.data || !res2.data.traders) return [];
+var traders = res2.data.traders;
+var wallets = [];
+for (var t = 0; t < traders.length; t++) {
+if (traders[t].wallet) wallets.push(traders[t].wallet);
+}
+log(’  -> ’ + wallets.length + ’ top traders trouves sur DexScreener’);
+return wallets;
+} catch (err) {
+return [];
+}
+}
+
 // Wallets actifs sur un token via Helius
 async function getWalletsFromToken(tokenAddress) {
 try {
@@ -304,6 +329,10 @@ var newWallets = {};
 
 for (var tok = 0; tok < trendingTokens.length; tok++) {
   log('Token ' + (tok + 1) + '/' + trendingTokens.length + ' : ' + trendingTokens[tok].substring(0, 8) + '...');
+  var topTraders = await getTopTradersFromToken(trendingTokens[tok]);
+  for (var tt = 0; tt < topTraders.length; tt++) {
+    if (!processedAddresses[topTraders[tt]]) newWallets[topTraders[tt]] = true;
+  }
   var wallets = await getWalletsFromToken(trendingTokens[tok]);
   for (var w = 0; w < wallets.length; w++) {
     if (!processedAddresses[wallets[w]]) newWallets[wallets[w]] = true;
@@ -327,7 +356,7 @@ log('=== ' + allResults.length + ' wallets retenus ===');
 var report = generateReport(allResults);
 console.log('\n' + report);
 saveResults(allResults, report);
-log('Cycle termine. Prochain dans 6h.');
+log('Cycle termine. Prochain dans 2h.');
 ```
 
 } catch (err) {
@@ -380,7 +409,7 @@ for (var j = 0; j < top.length; j++) {
 }
 
 r += ‘\n============================================================\n’;
-r += ’  Prochain rapport dans 6 heures\n’;
+r += ’  Prochain rapport dans 2 heures\n’;
 r += ‘============================================================\n’;
 return r;
 }
@@ -397,7 +426,7 @@ updated_at: timestamp(), count: wallets.length, wallets: wallets
 log(’Rapport : ’ + reportPath);
 }
 
-var SIX_HOURS = 6 * 60 * 60 * 1000;
-log(‘Wallet Tracker (Shyft) demarre - cycle toutes les 6h’);
+var TWO_HOURS = 2 * 60 * 60 * 1000;
+log(“Wallet Tracker (Shyft) demarre - cycle toutes les 2h”);
 run();
-setInterval(function() { run(); }, SIX_HOURS);
+setInterval(function() { run(); }, TWO_HOURS);
