@@ -5,23 +5,18 @@ const path = require(‘path’);
 const CONFIG = {
 HELIUS_API_KEY: ‘9fdd885d-7eb9-4708-8962-c0bda789b1f8’,
 HELIUS_API: ‘https://api.helius.xyz/v0’,
+BIRDEYE_API: ‘https://public-api.birdeye.so’,
 MIN_WINRATE: 57,
 MAX_RUG_RATE: 20,
 MIN_TRADES: 10,
-SEED_WALLETS: [
-‘acout8Z7tJFD55YqbZJuKwi2aVVrJgWbRBhMmbUC6oF’,
-‘GCnpLG65NDNM5ALsXrNNTBNQMvBFAFrjSmfmxpYKs4Q’,
-‘ASTyfSima4LLAdDgoFGkgqoKowG1LZFDr9fAQrg7iaJZ’,
-‘DfMxre4cKmvogbLrPigxmibVTTQDuzjdXojWzjCXXhzj’,
-‘HxFLKUAmAMLz1jtT3hbvCMELwH5H9tpM2QugP8sKyfhW’,
-‘5tzFkiKscXHK5ZXCGbOfB98ooDd7AFtML9qDKEk7FHQL’,
-‘BrZGQkKPWVnJiw6fhqxH5cMjz8AHhFiLsRZUJFLGMhB5’,
-‘CuieVDEDtLo7FypA9SbLM9saXFdb1dsshEkyErMqkRQq’,
+KNOWN_WALLETS: [
+{ address: ‘65paNEG8m7mCVoASVF2KbRdU21aKXdASSB9G3NjCSQuE’, alias: ‘jijo’ },
+{ address: ‘4BdKaxN8G6ka4GYtQQWk4G4dZRUTX2vQH9GcXdBREFUk’, alias: ‘PULL’ },
 ],
 RAPPORT_DIR: path.join(__dirname, ‘rapports’),
 LATEST_JSON: path.join(__dirname, ‘latest_wallets.json’),
 HISTORIQUE_DIR: path.join(__dirname, ‘historique’),
-DELAY: 500,
+DELAY: 800,
 MAX_RETRIES: 3,
 };
 
@@ -47,24 +42,56 @@ function log(msg) {
 console.log(’[’ + timestamp() + ’] ’ + msg);
 }
 
-async function getWalletTransactions(walletAddress) {
+// Recupere les top traders depuis Birdeye
+async function getTopTradersFromBirdeye() {
+log(‘Recherche top traders sur Birdeye…’);
 for (var i = 0; i < CONFIG.MAX_RETRIES; i++) {
 try {
-var res = await axios.get(CONFIG.HELIUS_API + ‘/addresses/’ + walletAddress + ‘/transactions’, {
-params: { limit: 200, type: ‘SWAP’, ‘api-key’: CONFIG.HELIUS_API_KEY },
+var res = await axios.get(CONFIG.BIRDEYE_API + ‘/trader/gainers-losers’, {
+params: {
+type: ‘today’,
+sort_by: ‘PnL’,
+sort_type: ‘desc’,
+offset: 0,
+limit: 50,
+},
+headers: {
+‘X-Chain’: ‘solana’,
+‘x-api-key’: ‘public’,
+},
 timeout: 20000,
 });
-return res.data || [];
-} catch (err) {
-log(’Tentative ’ + (i + 1) + ‘/’ + CONFIG.MAX_RETRIES + ’ echouee pour ’ + walletAddress.substring(0, 8));
-if (i < CONFIG.MAX_RETRIES - 1) {
-await sleep(CONFIG.DELAY * (i + 2));
+if (res.data && res.data.data && res.data.data.items) {
+log(‘Birdeye: ’ + res.data.data.items.length + ’ traders recuperes’);
+return res.data.data.items;
 }
+return [];
+} catch (err) {
+log(’Birdeye tentative ’ + (i + 1) + ‘/’ + CONFIG.MAX_RETRIES + ’ echouee: ’ + err.message);
+if (i < CONFIG.MAX_RETRIES - 1) await sleep(CONFIG.DELAY * (i + 2));
 }
 }
 return [];
 }
 
+// Recupere les transactions d’un wallet via Helius
+async function getWalletTransactions(walletAddress) {
+for (var i = 0; i < CONFIG.MAX_RETRIES; i++) {
+try {
+var res = await axios.get(CONFIG.HELIUS_API + ‘/addresses/’ + walletAddress + ‘/transactions’, {
+params: { limit: 100, type: ‘SWAP’, ‘api-key’: CONFIG.HELIUS_API_KEY },
+timeout: 20000,
+});
+return res.data || [];
+} catch (err) {
+log(’Helius tentative ’ + (i + 1) + ‘/’ + CONFIG.MAX_RETRIES + ’ echouee pour ’ + walletAddress.substring(0, 8));
+if (i < CONFIG.MAX_RETRIES - 1) await sleep(CONFIG.DELAY * (i + 2));
+}
+}
+return [];
+}
+
+// Analyse les transactions d’un wallet et calcule ses stats
 function analyzeWalletTrades(transactions, walletAddress) {
 var tokenPositions = {};
 var now = Date.now() / 1000;
@@ -162,45 +189,88 @@ if (stats.totalTrades < CONFIG.MIN_TRADES) return false;
 return true;
 }
 
-async function analyzeWallets() {
-var results = [];
-log(‘Analyse de ’ + CONFIG.SEED_WALLETS.length + ’ wallets via Helius…’);
+// Analyse un wallet et retourne ses stats si il passe les filtres
+async function processWallet(address, alias) {
+alias = alias || ‘’;
+log(’Analyse de ’ + address.substring(0, 8) + ‘… (’ + (alias || ‘inconnu’) + ‘)’);
 
-for (var i = 0; i < CONFIG.SEED_WALLETS.length; i++) {
-var wallet = CONFIG.SEED_WALLETS[i];
-log(’[’ + (i + 1) + ‘/’ + CONFIG.SEED_WALLETS.length + ’] ’ + wallet.substring(0, 8) + ‘…’);
-
-```
-var transactions = await getWalletTransactions(wallet);
+var transactions = await getWalletTransactions(address);
 
 if (!transactions || transactions.length === 0) {
-  log('Aucune transaction trouvee');
-  await sleep(CONFIG.DELAY);
-  continue;
+log(’  -> Aucune transaction SWAP trouvee’);
+return null;
 }
 
-log(transactions.length + ' transactions recuperees');
-var stats = analyzeWalletTrades(transactions, wallet);
+log(’  -> ’ + transactions.length + ’ transactions recuperees’);
+var stats = analyzeWalletTrades(transactions, address);
+stats.alias = alias;
 var score = calculateScore(stats);
+stats.score = score;
 var passes = filterWallet(stats);
 
-log('Winrate: ' + stats.winrate + '% | Rug: ' + stats.rugRate + '% | Trades: ' + stats.totalTrades + ' | Score: ' + score + ' | ' + (passes ? 'RETENU' : 'filtre'));
+log(’  -> Winrate: ’ + stats.winrate + ’% | Rug: ’ + stats.rugRate + ’% | Trades: ’ + stats.totalTrades + ’ | Score: ’ + score + ’ | ’ + (passes ? ‘RETENU’ : ‘filtre’));
 
-if (passes) {
-  stats.score = score;
-  results.push(stats);
+if (passes) return stats;
+return null;
 }
 
+async function run() {
+log(‘Demarrage Wallet Tracker v2…’);
+ensureDirs();
+
+var allResults = [];
+var processedAddresses = {};
+
+try {
+// ETAPE 1 : Analyser les wallets connus (jijo, PULL)
+log(’— Etape 1 : Wallets connus —’);
+for (var k = 0; k < CONFIG.KNOWN_WALLETS.length; k++) {
+var known = CONFIG.KNOWN_WALLETS[k];
+processedAddresses[known.address] = true;
+var result = await processWallet(known.address, known.alias);
+if (result) allResults.push(result);
 await sleep(CONFIG.DELAY);
-```
-
 }
 
-results.sort(function(a, b) {
-return parseFloat(b.score) - parseFloat(a.score);
+```
+// ETAPE 2 : Decouvrir de nouveaux wallets via Birdeye
+log('--- Etape 2 : Decouverte via Birdeye ---');
+var birdeyeTraders = await getTopTradersFromBirdeye();
+
+if (birdeyeTraders.length > 0) {
+  var count = 0;
+  for (var b = 0; b < birdeyeTraders.length && count < 20; b++) {
+    var trader = birdeyeTraders[b];
+    var addr = trader.address || trader.wallet;
+    if (!addr || processedAddresses[addr]) continue;
+    processedAddresses[addr] = true;
+    count++;
+    var res = await processWallet(addr, '');
+    if (res) allResults.push(res);
+    await sleep(CONFIG.DELAY);
+  }
+} else {
+  log('Birdeye indisponible - analyse des wallets connus uniquement');
+}
+
+// Tri par score
+allResults.sort(function(a, b) {
+  return parseFloat(b.score) - parseFloat(a.score);
 });
 
-return results;
+log(allResults.length + ' wallets retenus au total');
+
+// Rapport
+var report = generateReport(allResults);
+console.log('\n' + report);
+saveResults(allResults, report);
+log('Cycle termine.');
+```
+
+} catch (err) {
+log(’Erreur inattendue : ’ + err.message);
+console.error(err);
+}
 }
 
 function generateReport(wallets) {
@@ -211,8 +281,8 @@ r += ’  RAPPORT WALLET TRACKER v2 - ’ + now + ‘\n’;
 r += ‘============================================================\n\n’;
 r += ‘RESUME\n’;
 r += ‘–––––––––––––––––––––––\n’;
-r += ’  Wallets analyses : ’ + CONFIG.SEED_WALLETS.length + ‘\n’;
-r += ’  Wallets retenus  : ’ + wallets.length + ‘\n\n’;
+r += ’  Wallets retenus  : ’ + wallets.length + ‘\n’;
+r += ’  Criteres         : Winrate >= ’ + CONFIG.MIN_WINRATE + ’%, Rug < ’ + CONFIG.MAX_RUG_RATE + ‘%, Actif 7j, >= ’ + CONFIG.MIN_TRADES + ’ trades\n\n’;
 
 if (wallets.length === 0) {
 r += ‘Aucun wallet ne passe les filtres ce cycle.\n\n’;
@@ -221,7 +291,8 @@ r += ‘TOP WALLETS\n’;
 r += ‘–––––––––––––––––––––––\n\n’;
 for (var i = 0; i < wallets.length; i++) {
 var w = wallets[i];
-r += (i + 1) + ‘. ’ + w.address.substring(0, 8) + ‘…’ + w.address.slice(-4) + ‘\n’;
+var label = w.alias ? w.alias : w.address.substring(0, 8) + ‘…’ + w.address.slice(-4);
+r += (i + 1) + ‘. ’ + label + ‘\n’;
 r += ’   Score         : ’ + w.score + ‘/100\n’;
 r += ’   Winrate       : ’ + w.winrate + ‘%\n’;
 r += ’   Rug Rate      : ’ + w.rugRate + ‘%\n’;
@@ -231,12 +302,16 @@ r += ’   Actif 30j     : ’ + w.recentTrades30d + ’ trades\n’;
 r += ’   Dernier trade : ’ + w.lastActiveDate + ‘\n’;
 r += ’   Adresse full  : ’ + w.address + ‘\n\n’;
 }
-r += ‘RECOMMANDES POUR LE BOT DE TRADING\n’;
-r += ‘–––––––––––––––––––––––\n’;
+
+```
+r += 'RECOMMANDES POUR LE BOT DE TRADING\n';
+r += '----------------------------------------------\n';
 var top = wallets.slice(0, 3);
 for (var j = 0; j < top.length; j++) {
-r += ’  ’ + (j + 1) + ’. ’ + top[j].address + ’  (score: ’ + top[j].score + ‘)\n’;
+  r += '  ' + (j + 1) + '. ' + top[j].address + '  (score: ' + top[j].score + ')\n';
 }
+```
+
 }
 
 r += ‘\n============================================================\n’;
@@ -251,25 +326,12 @@ var reportPath = path.join(CONFIG.RAPPORT_DIR, ‘rapport_’ + tag + ‘.txt’
 fs.writeFileSync(reportPath, report, ‘utf8’);
 var jsonPath = path.join(CONFIG.HISTORIQUE_DIR, ‘wallets_’ + tag + ‘.json’);
 fs.writeFileSync(jsonPath, JSON.stringify(wallets, null, 2), ‘utf8’);
-fs.writeFileSync(CONFIG.LATEST_JSON, JSON.stringify({ updated_at: timestamp(), count: wallets.length, wallets: wallets }, null, 2), ‘utf8’);
+fs.writeFileSync(CONFIG.LATEST_JSON, JSON.stringify({
+updated_at: timestamp(),
+count: wallets.length,
+wallets: wallets,
+}, null, 2), ‘utf8’);
 log(’Rapport sauvegarde : ’ + reportPath);
-log(’JSON sauvegarde    : ’ + jsonPath);
-}
-
-async function run() {
-log(‘Demarrage Wallet Tracker v2 Helius…’);
-ensureDirs();
-try {
-var wallets = await analyzeWallets();
-log(wallets.length + ’ wallets retenus’);
-var report = generateReport(wallets);
-console.log(report);
-saveResults(wallets, report);
-log(‘Cycle termine.’);
-} catch (err) {
-log(’Erreur : ’ + err.message);
-console.error(err);
-}
 }
 
 var SIX_HOURS = 6 * 60 * 60 * 1000;
