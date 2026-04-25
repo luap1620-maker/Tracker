@@ -185,8 +185,8 @@ totalTx: txs.length,
 async function scrapeUwuuProfile(page, address) {
 try {
 await page.goto(CONFIG.UWUU_TRADER + address, { timeout: 30000 });
-await page.wait_for_timeout(6000);
-var text = await page.inner_text(‘body’);
+await page.waitForTimeout(6000);
+var text = await page.innerText(‘body’);
 
 ```
 var extract = function(pattern) {
@@ -194,7 +194,7 @@ var extract = function(pattern) {
   return m ? m[1].trim() : 'N/A';
 };
 
-return {
+var result = {
   winrate30d: extract(/WIN RATE\s*([\d.]+%)/),
   pnl30d: extract(/30D PNL\s*\$([\d,.-]+)/),
   roi30d: extract(/30D ROI\s*([+-]?[\d.]+%)/),
@@ -206,6 +206,9 @@ return {
   bestTrade: extract(/BEST TRADE[\s\S]*?\$([\d,.-]+)/),
   worstTrade: extract(/WORST TRADE[\s\S]*?(-?\$[\d,.-]+)/),
 };
+
+log('  uwuu scrape: WR ' + result.winrate30d + ' | PnL $' + result.pnl30d + ' | Trades ' + result.trades30d);
+return result;
 ```
 
 } catch (err) {
@@ -262,8 +265,10 @@ if (parseFloat(helius.rugRate) >= CONFIG.MAX_RUG_RATE) return false;
 var trades = kol.trades_monthly || helius.totalTrades;
 if (trades < CONFIG.MIN_TRADES) return false;
 
-// Anciennete : Helius
-if (helius.daysActive < CONFIG.MIN_DAYS_ACTIVE) return false;
+// Anciennete : Helius ou uwuu all time comme fallback
+var daysActive = helius.daysActive;
+if (daysActive < CONFIG.MIN_DAYS_ACTIVE && kol.trades > 100) daysActive = 31;
+if (daysActive < CONFIG.MIN_DAYS_ACTIVE) return false;
 
 // ROI monthly positif sur uwuu.ai
 if (kol.roi_monthly !== undefined && kol.roi_monthly <= 0) return false;
