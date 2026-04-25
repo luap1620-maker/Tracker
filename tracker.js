@@ -12,11 +12,11 @@ UWUU_API: ‘https://uwuu.ai/api/kols’,
 UWUU_TRADER: ‘https://uwuu.ai/trader/’,
 SOL_PRICE: 150,
 MIN_WINRATE: 50,
-MAX_RUG_RATE: 25,
+MAX_RUG_RATE: 35,
 MIN_TRADES: 3,
 MIN_BALANCE_USD: 500,
 MIN_DAYS_ACTIVE: 30,
-TOP_WALLETS: 50,
+TOP_WALLETS: 100,
 HTTP_PORT: 3001,
 RAPPORT_DIR: path.join(__dirname, ‘rapports’),
 LATEST_JSON: path.join(__dirname, ‘latest_wallets.json’),
@@ -108,7 +108,7 @@ return allTxs;
 function analyzeHelius(txs, address) {
 var tokenTrades = {};
 var now = Date.now() / 1000;
-var weekAgo = now - (7 * 24 * 3600);
+var twoWeeksAgo = now - (14 * 24 * 3600);
 var firstActive = 0;
 var lastActive = 0;
 var recent7d = 0;
@@ -118,7 +118,7 @@ txs.forEach(function(tx) {
 if (!tx || !tx.timestamp) return;
 if (tx.timestamp > lastActive) lastActive = tx.timestamp;
 if (firstActive === 0 || tx.timestamp < firstActive) firstActive = tx.timestamp;
-if (tx.timestamp > weekAgo) recent7d++;
+if (tx.timestamp > twoWeeksAgo) recent7d++;
 var day = new Date(tx.timestamp * 1000).toISOString().substring(0, 10);
 dailyCounts[day] = (dailyCounts[day] || 0) + 1;
 
@@ -176,7 +176,7 @@ recent7d: recent7d,
 maxPerDay: maxPerDay,
 daysActive: firstActive > 0 ? Math.floor((lastActive - firstActive) / 86400) : 0,
 lastActiveDate: lastActive > 0 ? new Date(lastActive * 1000).toISOString().substring(0, 10) : ‘N/A’,
-isActive: lastActive > weekAgo,
+isActive: lastActive > twoWeeksAgo,
 totalTx: txs.length,
 };
 }
@@ -295,67 +295,77 @@ log(‘Lancement Playwright…’);
 var browser = await chromium.launch({ headless: true });
 var page = await browser.newPage();
 
+try {
 for (var i = 0; i < uwuuWallets.length; i++) {
 var kol = uwuuWallets[i];
 var address = kol.wallet;
 var alias = kol.name || address.substring(0, 8);
 
 ```
-log('[' + (i+1) + '/' + uwuuWallets.length + '] ' + alias + ' (' + address.substring(0, 8) + ')');
+  log('[' + (i+1) + '/' + uwuuWallets.length + '] ' + alias + ' (' + address.substring(0, 8) + ')');
 
-var balance = await getWalletBalance(address);
-var txs = await getAllTransactions(address);
-var helius = analyzeHelius(txs, address);
-var uwuuProfile = await scrapeUwuuProfile(page, address);
+  // Lancer Helius et Playwright en parallele
+  var results2 = await Promise.all([
+    Promise.all([getWalletBalance(address), getAllTransactions(address)]),
+    scrapeUwuuProfile(page, address)
+  ]);
 
-log('  Helius : WR ' + helius.winrate + '% | PnL ' + helius.pnlSol + ' SOL ($' + helius.pnlUsd + ') | Rug ' + helius.rugRate + '% | ' + helius.totalTrades + ' trades | ' + helius.daysActive + 'j');
-if (uwuuProfile) {
-  log('  uwuu   : WR ' + uwuuProfile.winrate30d + ' | PnL ' + uwuuProfile.pnl30d + ' | ROI ' + uwuuProfile.roi30d + ' | ' + uwuuProfile.trades30d + ' trades');
+  var balance = results2[0][0];
+  var txs = results2[0][1];
+  var helius = analyzeHelius(txs, address);
+  var uwuuProfile = results2[1];
+
+  log('  Helius : WR ' + helius.winrate + '% | PnL ' + helius.pnlSol + ' SOL ($' + helius.pnlUsd + ') | Rug ' + helius.rugRate + '% | ' + helius.totalTrades + ' trades | ' + helius.daysActive + 'j');
+  if (uwuuProfile) {
+    log('  uwuu   : WR ' + uwuuProfile.winrate30d + ' | PnL ' + uwuuProfile.pnl30d + ' | ROI ' + uwuuProfile.roi30d + ' | ' + uwuuProfile.trades30d + ' trades');
+  }
+
+  var sc = calcScore(helius, uwuuProfile, kol, balance);
+  var pass = passes(helius, uwuuProfile, kol, balance);
+  log('  Score: ' + sc + ' | ' + (pass ? 'RETENU' : 'filtre'));
+
+  if (pass) {
+    results.push({
+      address: address,
+      alias: alias,
+      balance_usd: balance.toFixed(0),
+      score: sc,
+      helius: {
+        winrate: helius.winrate,
+        pnlSol: helius.pnlSol,
+        pnlUsd: helius.pnlUsd,
+        rugRate: helius.rugRate,
+        totalTrades: helius.totalTrades,
+        wins: helius.wins,
+        losses: helius.losses,
+        rugs: helius.rugs,
+        totalTokens: helius.totalTokens,
+        recent7d: helius.recent7d,
+        maxPerDay: helius.maxPerDay,
+        daysActive: helius.daysActive,
+        lastActiveDate: helius.lastActiveDate,
+        totalTx: helius.totalTx,
+      },
+      uwuu_api: {
+        pnl_weekly: kol.pnl_weekly,
+        roi_weekly: kol.roi_weekly,
+        trades_weekly: kol.trades_weekly,
+        pnl_monthly: kol.pnl_monthly,
+        roi_monthly: kol.roi_monthly,
+        trades_monthly: kol.trades_monthly,
+        pnl_all: kol.pnl,
+        roi_all: kol.roi,
+        trades_all: kol.trades,
+      },
+      uwuu_profile: uwuuProfile || {},
+    });
+  }
+  await sleep(CONFIG.DELAY);
 }
-
-var sc = calcScore(helius, uwuuProfile, kol, balance);
-var pass = passes(helius, uwuuProfile, kol, balance);
-log('  Score: ' + sc + ' | ' + (pass ? 'RETENU' : 'filtre'));
-
-if (pass) {
-  results.push({
-    address: address,
-    alias: alias,
-    balance_usd: balance.toFixed(0),
-    score: sc,
-    helius: {
-      winrate: helius.winrate,
-      pnlSol: helius.pnlSol,
-      pnlUsd: helius.pnlUsd,
-      rugRate: helius.rugRate,
-      totalTrades: helius.totalTrades,
-      wins: helius.wins,
-      losses: helius.losses,
-      rugs: helius.rugs,
-      totalTokens: helius.totalTokens,
-      recent7d: helius.recent7d,
-      maxPerDay: helius.maxPerDay,
-      daysActive: helius.daysActive,
-      lastActiveDate: helius.lastActiveDate,
-      totalTx: helius.totalTx,
-    },
-    uwuu_api: {
-      pnl_weekly: kol.pnl_weekly,
-      roi_weekly: kol.roi_weekly,
-      trades_weekly: kol.trades_weekly,
-      pnl_monthly: kol.pnl_monthly,
-      roi_monthly: kol.roi_monthly,
-      trades_monthly: kol.trades_monthly,
-      pnl_all: kol.pnl,
-      roi_all: kol.roi,
-      trades_all: kol.trades,
-    },
-    uwuu_profile: uwuuProfile || {},
-  });
-}
-await sleep(CONFIG.DELAY);
 ```
 
+} catch (err) {
+log(’Erreur cycle : ’ + err.message);
 }
 
 await browser.close();
