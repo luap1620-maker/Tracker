@@ -89,7 +89,7 @@ return res.data || [];
 async function getAllTransactions(address) {
 var allTxs = [];
 var before = null;
-var threeMonthsAgo = Date.now() / 1000 - (90 * 24 * 3600);
+var threeMonthsAgo = Date.now() / 1000 - (30 * 24 * 3600);
 var stop = false;
 while (!stop) {
 var txs = await getTransactionsPage(address, before);
@@ -394,7 +394,7 @@ var up = w.uwuu_profile;
 r += (i+1) + ‘. ’ + w.alias + ‘\n’;
 r += ’   Score            : ’ + w.score + ‘/100\n’;
 r += ’   Balance          : $’ + w.balance_usd + ‘\n’;
-r += ’   — HELIUS (PnL realise - 3 mois) —\n’;
+r += ’   — HELIUS (PnL realise - 30 jours) —\n’;
 r += ’   Winrate          : ’ + h.winrate + ‘% (’ + h.wins + ‘W / ’ + h.losses + ‘L)\n’;
 r += ’   PnL              : ’ + h.pnlSol + ’ SOL ($’ + h.pnlUsd + ‘)\n’;
 r += ’   Rug Rate         : ’ + h.rugRate + ‘% (’ + h.rugs + ’ rugs / ’ + h.totalTokens + ’ tokens)\n’;
