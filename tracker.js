@@ -11,7 +11,7 @@ HELIUS_RPC: ‘https://mainnet.helius-rpc.com/?api-key=9fdd885d-7eb9-4708-8962-c
 UWUU_API: ‘https://uwuu.ai/api/kols’,
 UWUU_TRADER: ‘https://uwuu.ai/trader/’,
 SOL_PRICE: 150,
-MIN_WINRATE: 55,
+MIN_WINRATE: 50,
 MAX_RUG_RATE: 25,
 MIN_TRADES: 3,
 MIN_BALANCE_USD: 500,
@@ -236,17 +236,30 @@ return [];
 }
 }
 
-function calcScore(helius, uwuu, balance) {
+function calcScore(helius, uwuu, kol, balance) {
 var s = 0;
-var wr = parseFloat(helius.winrate);
-var uwuuWr = uwuu ? parseFloat((uwuu.winrate30d || ‘0’).replace(’%’,’’)) : 0;
-var avgWr = uwuuWr > 0 ? (wr + uwuuWr) / 2 : wr;
-s += Math.min((avgWr / 100) * 35, 35);
+
+// Winrate uwuu 30j (25pts)
+var uwuuWr = uwuu ? parseFloat((uwuu.winrate30d || ‘0’).replace(’%’, ‘’)) : 0;
+s += Math.min((uwuuWr / 100) * 25, 25);
+
+// ROI monthly uwuu (20pts)
+var roiMonthly = kol.roi_monthly || 0;
+s += Math.min((roiMonthly / 200) * 20, 20);
+
+// PnL monthly uwuu (15pts)
+var pnlMonthly = kol.pnl_monthly || 0;
+s += Math.min((pnlMonthly / 50000) * 15, 15);
+
+// Rug rate Helius (20pts)
 s += Math.max((1 - parseFloat(helius.rugRate) / 100) * 20, 0);
-s += Math.min((helius.totalTrades / 50) * 20, 20);
+
+// Activite recente Helius (10pts)
 s += Math.min((helius.recent7d / 30) * 10, 10);
-s += Math.min((parseFloat(helius.pnlSol) / 100) * 10, 10);
-s += Math.min((balance / 10000) * 5, 5);
+
+// Balance (10pts)
+s += Math.min((balance / 10000) * 10, 10);
+
 return s.toFixed(1);
 }
 
@@ -254,24 +267,18 @@ function passes(helius, uwuuProfile, kol, balance) {
 if (balance < CONFIG.MIN_BALANCE_USD) return false;
 if (!helius.isActive) return false;
 
-// Winrate : uwuu.ai profil en priorite, sinon Helius
-var wr = uwuuProfile ? parseFloat((uwuuProfile.winrate30d || ‘0’).replace(’%’, ‘’)) : parseFloat(helius.winrate);
+// Winrate uwuu 30j >= 50%
+var wr = uwuuProfile ? parseFloat((uwuuProfile.winrate30d || ‘0’).replace(’%’, ‘’)) : 0;
 if (wr < CONFIG.MIN_WINRATE) return false;
 
-// Rug rate : Helius uniquement
+// PnL monthly positif
+if ((kol.pnl_monthly || 0) <= 0) return false;
+
+// Rug rate Helius < 25%
 if (parseFloat(helius.rugRate) >= CONFIG.MAX_RUG_RATE) return false;
 
-// Trades : uwuu.ai monthly en priorite, sinon Helius
-var trades = kol.trades_monthly || helius.totalTrades;
-if (trades < CONFIG.MIN_TRADES) return false;
-
-// Anciennete : Helius ou uwuu all time comme fallback
-var daysActive = helius.daysActive;
-if (daysActive < CONFIG.MIN_DAYS_ACTIVE && kol.trades > 100) daysActive = 31;
-if (daysActive < CONFIG.MIN_DAYS_ACTIVE) return false;
-
-// ROI monthly positif sur uwuu.ai
-if (kol.roi_monthly !== undefined && kol.roi_monthly <= 0) return false;
+// Trades all time > 50 (wallet experimente)
+if ((kol.trades || 0) < 50) return false;
 
 return true;
 }
@@ -306,7 +313,7 @@ if (uwuuProfile) {
   log('  uwuu   : WR ' + uwuuProfile.winrate30d + ' | PnL ' + uwuuProfile.pnl30d + ' | ROI ' + uwuuProfile.roi30d + ' | ' + uwuuProfile.trades30d + ' trades');
 }
 
-var sc = calcScore(helius, uwuuProfile, balance);
+var sc = calcScore(helius, uwuuProfile, kol, balance);
 var pass = passes(helius, uwuuProfile, kol, balance);
 log('  Score: ' + sc + ' | ' + (pass ? 'RETENU' : 'filtre'));
 
