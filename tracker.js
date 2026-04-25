@@ -239,26 +239,35 @@ return [];
 function calcScore(helius, uwuu, kol, balance) {
 var s = 0;
 
-// Winrate uwuu 30j (25pts)
+// Winrate uwuu 30j (20pts)
 var uwuuWr = uwuu ? parseFloat((uwuu.winrate30d || ‘0’).replace(’%’, ‘’)) : 0;
-s += Math.min((uwuuWr / 100) * 25, 25);
+s += Math.min((uwuuWr / 100) * 20, 20);
 
-// ROI monthly uwuu (20pts)
+// Winrate Helius (15pts)
+var heliusWr = parseFloat(helius.winrate);
+s += Math.min((heliusWr / 100) * 15, 15);
+
+// Coherence entre les deux sources (15pts) - penalise si trop de divergence
+var wrDiff = Math.abs(uwuuWr - heliusWr);
+var coherence = Math.max(0, 1 - wrDiff / 100);
+s += coherence * 15;
+
+// ROI monthly uwuu (15pts)
 var roiMonthly = kol.roi_monthly || 0;
-s += Math.min((roiMonthly / 200) * 20, 20);
+s += Math.min((roiMonthly / 200) * 15, 15);
 
-// PnL monthly uwuu (15pts)
-var pnlMonthly = kol.pnl_monthly || 0;
-s += Math.min((pnlMonthly / 50000) * 15, 15);
+// PnL Helius positif (10pts) - bonus si PnL realise positif
+var pnlSol = parseFloat(helius.pnlSol);
+if (pnlSol > 0) s += Math.min((pnlSol / 50) * 10, 10);
 
-// Rug rate Helius (20pts)
-s += Math.max((1 - parseFloat(helius.rugRate) / 100) * 20, 0);
+// Rug rate Helius (15pts)
+s += Math.max((1 - parseFloat(helius.rugRate) / 100) * 15, 0);
 
-// Activite recente Helius (10pts)
-s += Math.min((helius.recent7d / 30) * 10, 10);
+// Activite recente (5pts)
+s += Math.min((helius.recent7d / 30) * 5, 5);
 
-// Balance (10pts)
-s += Math.min((balance / 10000) * 10, 10);
+// Balance (5pts)
+s += Math.min((balance / 10000) * 5, 5);
 
 return s.toFixed(1);
 }
