@@ -1,0 +1,18 @@
+import asyncio
+from playwright.async_api import async_playwright
+
+async def main():
+async with async_playwright() as p:
+browser = await p.chromium.launch(headless=True)
+page = await browser.new_page()
+await page.goto(‘https://uwuu.ai/leaderboard’)
+await page.wait_for_timeout(5000)
+content = await page.content()
+print(‘Taille:’, len(content))
+print(‘Connect visible:’, ‘connect’ in content.lower())
+print(‘Login visible:’, ‘login’ in content.lower())
+print(‘Leaderboard data:’, ‘trader’ in content.lower() or ‘wallet’ in content.lower())
+print(content[3000:4000])
+await browser.close()
+
+asyncio.run(main())
