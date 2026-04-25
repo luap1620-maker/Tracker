@@ -63,6 +63,18 @@ log(‘Rapport accessible sur http://178.104.159.93:’ + CONFIG.HTTP_PORT);
 });
 }
 
+// Positions ouvertes via Helius
+async function getOpenPositions(address) {
+try {
+var res = await axios.get(CONFIG.HELIUS_API + ‘/addresses/’ + address + ‘/balances’, {
+params: { ‘api-key’: CONFIG.HELIUS_API_KEY },
+timeout: 10000,
+});
+var tokens = (res.data.tokens || []).filter(function(t) { return t.amount > 0; });
+return tokens.length;
+} catch (err) { return 0; }
+}
+
 // Balance via Helius
 async function getWalletBalance(address) {
 try {
@@ -315,16 +327,17 @@ var alias = kol.name || address.substring(0, 8);
 
   // Lancer Helius et Playwright en parallele
   var results2 = await Promise.all([
-    Promise.all([getWalletBalance(address), getAllTransactions(address)]),
+    Promise.all([getWalletBalance(address), getAllTransactions(address), getOpenPositions(address)]),
     scrapeUwuuProfile(page, address)
   ]);
 
   var balance = results2[0][0];
   var txs = results2[0][1];
+  var openPositions = results2[0][2];
   var helius = analyzeHelius(txs, address);
   var uwuuProfile = results2[1];
 
-  log('  Helius : WR ' + helius.winrate + '% | PnL ' + helius.pnlSol + ' SOL ($' + helius.pnlUsd + ') | Rug ' + helius.rugRate + '% | ' + helius.totalTrades + ' trades | ' + helius.daysActive + 'j');
+  log('  Helius : WR ' + helius.winrate + '% | PnL ' + helius.pnlSol + ' SOL ($' + helius.pnlUsd + ') | Rug ' + helius.rugRate + '% | ' + helius.totalTrades + ' trades | ' + helius.daysActive + 'j | ' + openPositions + ' positions ouvertes');
   if (uwuuProfile) {
     log('  uwuu   : WR ' + uwuuProfile.winrate30d + ' | PnL ' + uwuuProfile.pnl30d + ' | ROI ' + uwuuProfile.roi30d + ' | ' + uwuuProfile.trades30d + ' trades');
   }
@@ -349,6 +362,7 @@ var alias = kol.name || address.substring(0, 8);
         losses: helius.losses,
         rugs: helius.rugs,
         totalTokens: helius.totalTokens,
+        openPositions: openPositions,
         recent7d: helius.recent7d,
         maxPerDay: helius.maxPerDay,
         daysActive: helius.daysActive,
@@ -417,6 +431,7 @@ r += ’   — HELIUS (PnL realise - 30 jours) —\n’;
 r += ’   Winrate          : ’ + h.winrate + ‘% (’ + h.wins + ‘W / ’ + h.losses + ‘L)\n’;
 r += ’   PnL              : ’ + h.pnlSol + ’ SOL ($’ + h.pnlUsd + ‘)\n’;
 r += ’   Rug Rate         : ’ + h.rugRate + ‘% (’ + h.rugs + ’ rugs / ’ + h.totalTokens + ’ tokens)\n’;
+r += ’   Positions ouv.   : ’ + h.openPositions + ’ tokens detenus\n’;
 r += ’   Trades fermes    : ’ + h.totalTrades + ‘\n’;
 r += ’   Tx analysees     : ’ + h.totalTx + ‘\n’;
 r += ’   Anciennete       : ’ + h.daysActive + ’ jours\n’;
